@@ -1,0 +1,131 @@
+trigger: none
+
+variables:
+  resourceGroupName: '<rg-name>'
+  azureSubscription: 'azconnection'
+  templateFile: 'bicep/infra/apim-custom-hostnames/main.bicep'
+  paramsFile: 'bicep/infra/apim-custom-hostnames/main.bicepparam'
+  gatewayHostname: 'api.yourdomain.com'
+  portalHostname: 'portal.yourdomain.com'
+  managementHostname: 'management.yourdomain.com'
+  gatewayCertSecureFile: 'gateway.pfx'
+  portalCertSecureFile: 'portal.pfx'
+  managementCertSecureFile: 'management.pfx'
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: DownloadSecureFile@1
+    name: gatewayCert
+    displayName: 'Download Gateway Certificate'
+    condition: ne(variables['gatewayCertSecureFile'], '')
+    inputs:
+      secureFile: $(gatewayCertSecureFile)
+
+  - task: DownloadSecureFile@1
+    name: portalCert
+    displayName: 'Download Portal Certificate'
+    condition: ne(variables['portalCertSecureFile'], '')
+    inputs:
+      secureFile: $(portalCertSecureFile)
+
+  - task: DownloadSecureFile@1
+    name: mgmtCert
+    displayName: 'Download Management Certificate'
+    condition: ne(variables['managementCertSecureFile'], '')
+    inputs:
+      secureFile: $(managementCertSecureFile)
+
+  # Step 1: Deploy certificates to Key Vault via ARM (bypasses firewall)
+  - task: AzureCLI@2
+    displayName: 'Deploy Certificates to Key Vault (ARM)'
+    inputs:
+      azureSubscription: $(azureSubscription)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        GATEWAY_B64=""
+        PORTAL_B64=""
+        MGMT_B64=""
+
+        if [ -f "$(gatewayCert.secureFilePath)" ]; then
+          GATEWAY_B64=$(base64 -w 0 "$(gatewayCert.secureFilePath)")
+        fi
+        if [ -f "$(portalCert.secureFilePath)" ]; then
+          PORTAL_B64=$(base64 -w 0 "$(portalCert.secureFilePath)")
+        fi
+        if [ -f "$(mgmtCert.secureFilePath)" ]; then
+          MGMT_B64=$(base64 -w 0 "$(mgmtCert.secureFilePath)")
+        fi
+
+        DEPLOY_NAME="apim-custom-hostnames-$(date +%Y%m%d%H%M%S)"
+
+        az deployment group create \
+          --name "$DEPLOY_NAME" \
+          --resource-group "$(resourceGroupName)" \
+          --template-file "$(templateFile)" \
+          --parameters "$(paramsFile)" \
+          --parameters \
+            gatewayCertBase64="$GATEWAY_B64" \
+            portalCertBase64="$PORTAL_B64" \
+            managementCertBase64="$MGMT_B64"
+
+        echo "##vso[task.setvariable variable=deploymentName]$DEPLOY_NAME"
+
+  # Step 2: Update APIM hostname configurations via az apim update (PATCH)
+  - task: AzureCLI@2
+    displayName: 'Update APIM Hostnames'
+    inputs:
+      azureSubscription: $(azureSubscription)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        RG="$(resourceGroupName)"
+        DEPLOY_NAME="$(deploymentName)"
+
+        # Read resource names from the Bicep deployment outputs (single call)
+        OUTPUTS=$(az deployment group show \
+          --resource-group "$RG" --name "$DEPLOY_NAME" \
+          --query properties.outputs -o json)
+
+        APIM_NAME=$(echo "$OUTPUTS" | jq -r '.apimName.value')
+        CLIENT_ID=$(echo "$OUTPUTS" | jq -r '.managedIdentityClientId.value')
+        KV_URI=$(echo "$OUTPUTS" | jq -r '.keyVaultUri.value')
+
+        KV_BASE="${KV_URI}secrets"
+
+        # Hostnames from pipeline variables
+        GATEWAY_HOST="$(gatewayHostname)"
+        PORTAL_HOST="$(portalHostname)"
+        MGMT_HOST="$(managementHostname)"
+
+        # Clear existing hostname configurations (Azure auto-restores the default *.azure-api.net)
+        az apim update --name "$APIM_NAME" --resource-group "$RG" \
+          --set hostnameConfigurations=[]
+
+        if [ -n "$GATEWAY_HOST" ]; then
+          az apim update --name "$APIM_NAME" --resource-group "$RG" \
+            --add hostnameConfigurations \
+              type=Proxy \
+              hostName="$GATEWAY_HOST" \
+              keyVaultId="${KV_BASE}/gateway-cert" \
+              identityClientId="$CLIENT_ID" \
+              defaultSslBinding=true
+        fi
+        if [ -n "$PORTAL_HOST" ]; then
+          az apim update --name "$APIM_NAME" --resource-group "$RG" \
+            --add hostnameConfigurations \
+              type=DeveloperPortal \
+              hostName="$PORTAL_HOST" \
+              keyVaultId="${KV_BASE}/portal-cert" \
+              identityClientId="$CLIENT_ID"
+        fi
+        if [ -n "$MGMT_HOST" ]; then
+          az apim update --name "$APIM_NAME" --resource-group "$RG" \
+            --add hostnameConfigurations \
+              type=Management \
+              hostName="$MGMT_HOST" \
+              keyVaultId="${KV_BASE}/mgmt-cert" \
+              identityClientId="$CLIENT_ID"
+        fi
