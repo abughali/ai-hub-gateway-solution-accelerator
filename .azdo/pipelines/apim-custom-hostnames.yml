@@ -100,32 +100,19 @@ steps:
         PORTAL_HOST="$(portalHostname)"
         MGMT_HOST="$(managementHostname)"
 
-        # Clear existing hostname configurations (Azure auto-restores the default *.azure-api.net)
-        az apim update --name "$APIM_NAME" --resource-group "$RG" \
-          --set hostnameConfigurations=[]
+        # Build the full hostnameConfigurations array, dropping any entries with empty hostnames.
+        # Apply all hostnames in a single PUT to avoid multiple long-running APIM updates.
+        HOSTNAME_CONFIGS=$(jq -nc \
+          --arg gw     "$GATEWAY_HOST" \
+          --arg portal "$PORTAL_HOST" \
+          --arg mgmt   "$MGMT_HOST" \
+          --arg cid    "$CLIENT_ID" \
+          --arg kvbase "$KV_BASE" '
+          [
+            {type:"Proxy",           hostName:$gw,     keyVaultId:($kvbase+"/gateway-cert"), identityClientId:$cid, defaultSslBinding:true},
+            {type:"DeveloperPortal", hostName:$portal, keyVaultId:($kvbase+"/portal-cert"),  identityClientId:$cid},
+            {type:"Management",      hostName:$mgmt,   keyVaultId:($kvbase+"/mgmt-cert"),    identityClientId:$cid}
+          ] | map(select(.hostName != ""))')
 
-        if [ -n "$GATEWAY_HOST" ]; then
-          az apim update --name "$APIM_NAME" --resource-group "$RG" \
-            --add hostnameConfigurations \
-              type=Proxy \
-              hostName="$GATEWAY_HOST" \
-              keyVaultId="${KV_BASE}/gateway-cert" \
-              identityClientId="$CLIENT_ID" \
-              defaultSslBinding=true
-        fi
-        if [ -n "$PORTAL_HOST" ]; then
-          az apim update --name "$APIM_NAME" --resource-group "$RG" \
-            --add hostnameConfigurations \
-              type=DeveloperPortal \
-              hostName="$PORTAL_HOST" \
-              keyVaultId="${KV_BASE}/portal-cert" \
-              identityClientId="$CLIENT_ID"
-        fi
-        if [ -n "$MGMT_HOST" ]; then
-          az apim update --name "$APIM_NAME" --resource-group "$RG" \
-            --add hostnameConfigurations \
-              type=Management \
-              hostName="$MGMT_HOST" \
-              keyVaultId="${KV_BASE}/mgmt-cert" \
-              identityClientId="$CLIENT_ID"
-        fi
+        az apim update --name "$APIM_NAME" --resource-group "$RG" \
+          --set hostnameConfigurations="$HOSTNAME_CONFIGS"
