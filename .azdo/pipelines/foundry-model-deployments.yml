@@ -1,0 +1,26 @@
+trigger: none
+
+variables:
+  resourceGroupName: '<rg-name>'
+  azureSubscription: 'azconnection'
+  templateFile: 'bicep/infra/foundry-model-deployments/main.bicep'
+  paramsFile: 'bicep/infra/foundry-model-deployments/main.bicepparam'
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Deploy Microsoft Foundry Model Deployments'
+    inputs:
+      azureSubscription: $(azureSubscription)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        DEPLOY_NAME="foundry-models-$(date +%Y%m%d%H%M%S)"
+
+        az deployment group create \
+          --name "$DEPLOY_NAME" \
+          --resource-group "$(resourceGroupName)" \
+          --template-file "$(templateFile)" \
+          --parameters "$(paramsFile)"
