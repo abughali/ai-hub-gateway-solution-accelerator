@@ -14,7 +14,7 @@ Notes:
 | Step | Action |
 |---|---|
 | **Certificate Import** | Deploys PFX certificates as Key Vault secrets via ARM (bypasses Key Vault firewall) |
-| **Hostname Configuration** | Clears `hostnameConfigurations` then appends each custom hostname (Gateway / Portal / Management) bound to its Key Vault certificate |
+| **Hostname Configuration** | Applies all custom hostnames (Gateway / Portal / Management) in a single `az apim update --set hostnameConfigurations=...` call, bound to their Key Vault certificates |
 
 ## What this deployment does NOT do
 
@@ -117,27 +117,22 @@ az deployment group create \
 CLIENT_ID=$(az identity show --name <identity-name> --resource-group <rg> --query clientId -o tsv)
 KV_BASE="https://<kv-name>.vault.azure.net/secrets"
 
-# Clear existing hostname configurations (Azure auto-restores the default *.azure-api.net)
-az apim update --name <apim-name> --resource-group <rg> --set hostnameConfigurations=[]
+# Build the full hostnameConfigurations array and apply it in a single PATCH.
+# Entries with empty hostnames are dropped so you can omit any of the three.
+HOSTNAME_CONFIGS=$(jq -nc \
+  --arg gw     "api.yourdomain.com" \
+  --arg portal "portal.yourdomain.com" \
+  --arg mgmt   "management.yourdomain.com" \
+  --arg cid    "$CLIENT_ID" \
+  --arg kvbase "$KV_BASE" '
+  [
+    {type:"Proxy",           hostName:$gw,     keyVaultId:($kvbase+"/gateway-cert"), identityClientId:$cid, defaultSslBinding:true},
+    {type:"DeveloperPortal", hostName:$portal, keyVaultId:($kvbase+"/portal-cert"),  identityClientId:$cid},
+    {type:"Management",      hostName:$mgmt,   keyVaultId:($kvbase+"/mgmt-cert"),    identityClientId:$cid}
+  ] | map(select(.hostName != ""))')
 
-# Gateway custom hostname
 az apim update --name <apim-name> --resource-group <rg> \
-  --add hostnameConfigurations \
-    type=Proxy hostName=api.yourdomain.com \
-    keyVaultId=${KV_BASE}/gateway-cert identityClientId=${CLIENT_ID} \
-    defaultSslBinding=true
-
-# Developer portal hostname
-az apim update --name <apim-name> --resource-group <rg> \
-  --add hostnameConfigurations \
-    type=DeveloperPortal hostName=portal.yourdomain.com \
-    keyVaultId=${KV_BASE}/portal-cert identityClientId=${CLIENT_ID}
-
-# Management hostname
-az apim update --name <apim-name> --resource-group <rg> \
-  --add hostnameConfigurations \
-    type=Management hostName=management.yourdomain.com \
-    keyVaultId=${KV_BASE}/mgmt-cert identityClientId=${CLIENT_ID}
+  --set hostnameConfigurations="$HOSTNAME_CONFIGS"
 ```
 
 ## How it works
