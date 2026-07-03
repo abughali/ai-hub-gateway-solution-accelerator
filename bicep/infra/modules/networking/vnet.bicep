@@ -30,6 +30,15 @@ param agentSubnetAddressPrefix string = '10.170.0.192/26'
 // Set to true to enable service endpoints for APIM subnet
 param enableServiceEndpointsForAPIM bool = true
 
+// When true, adds a default route (0.0.0.0/0) to firewallPrivateIpAddress and keeps
+// ApiManagement and AzureMonitor carve-outs on Internet.
+@description('Force-tunnel APIM subnet outbound Internet traffic through an NVA.')
+param enableForcedTunneling bool = false
+
+// Required when enableForcedTunneling is true.
+@description('Private IP address of the NVA to force-tunnel outbound traffic to.')
+param firewallPrivateIpAddress string = ''
+
 resource apimNsg 'Microsoft.Network/networkSecurityGroups@2020-07-01' = {
   name: apimNsgName
   location: location
@@ -176,7 +185,9 @@ resource apimRouteTable 'Microsoft.Network/routeTables@2023-11-01' = {
   location: location
   tags: union(tags, { 'azd-service-name': apimRouteTableName })
   properties: {
-    routes: [
+    // When force-tunneling, ignore BGP-learned 0.0.0.0/0 so the firewall default route wins.
+    disableBgpRoutePropagation: enableForcedTunneling
+    routes: concat([
       {
         name: 'apim-management'
         properties: {
@@ -185,7 +196,25 @@ resource apimRouteTable 'Microsoft.Network/routeTables@2023-11-01' = {
         }
       }
       // Add additional routes as required
-    ]
+    ], enableForcedTunneling ? [
+      // Keep APIM telemetry on the Internet so a firewall block can't break observability.
+      {
+        name: 'apim-azuremonitor'
+        properties: {
+          addressPrefix: 'AzureMonitor'
+          nextHopType: 'Internet'
+        }
+      }
+      // Force-tunnel all remaining outbound traffic to the NVA.
+      {
+        name: 'Internet'
+        properties: {
+          addressPrefix: '0.0.0.0/0'
+          nextHopType: 'VirtualAppliance'
+          nextHopIpAddress: firewallPrivateIpAddress
+        }
+      }
+    ] : [])
   }
 }
 

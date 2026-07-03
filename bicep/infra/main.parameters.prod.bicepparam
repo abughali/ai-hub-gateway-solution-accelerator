@@ -56,6 +56,10 @@ param cosmosDbPublicAccess = 'Disabled'
 param eventHubNetworkAccess = 'Disabled'
 param keyVaultExternalNetworkAccess = 'Disabled'
 
+// Force all APIM subnet egress through the firewall / NVA
+param enableForcedTunneling = true
+param firewallPrivateIpAddress = '10.131.1.10'  // prod NVA private IP
+
 // Key Vault SKU (premium recommended for production for HSM support)
 param keyVaultSkuName = 'premium'
 

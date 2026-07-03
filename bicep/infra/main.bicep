@@ -135,6 +135,17 @@ param agentSubnetNsgName string = ''
 @description('Route Table name for API Management subnet. Leave blank to use default naming conventions.')
 param apimRouteTableName string = ''
 
+// Forced tunneling / firewall egress (only used when a new VNet is provisioned)
+// When true, adds a default route (0.0.0.0/0) to firewallPrivateIpAddress and keeps
+// ApiManagement and AzureMonitor carve-outs on Internet.
+// IMPORTANT: Only applies when useExistingVnet is false.
+@description('Force-tunnel APIM subnet outbound Internet traffic through an NVA.')
+param enableForcedTunneling bool = false
+
+// Required when enableForcedTunneling is true.
+@description('Private IP address of the NVA to force-tunnel outbound traffic to.')
+param firewallPrivateIpAddress string = ''
+
 // VNet address space and subnet prefixes
 @description('Virtual Network address space.')
 param vnetAddressPrefix string = '10.170.0.0/24'
@@ -769,6 +780,8 @@ module vnet './modules/networking/vnet.bicep' = if(!useExistingVnet) {
     tags: tags
     privateDnsZoneNames: privateDnsZoneNames
     apimRouteTableName: !empty(apimRouteTableName) ? apimRouteTableName : 'rt-apim-${resourceToken}'
+    enableForcedTunneling: enableForcedTunneling
+    firewallPrivateIpAddress: firewallPrivateIpAddress
   }
   dependsOn: [
     dnsDeployment

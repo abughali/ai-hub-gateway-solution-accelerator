@@ -62,6 +62,11 @@ param functionAppNsgName = readEnvironmentVariable('FUNCTION_APP_NSG_NAME', '')
 param agentSubnetNsgName = readEnvironmentVariable('AGENT_SUBNET_NSG_NAME', '')
 param apimRouteTableName = readEnvironmentVariable('APIM_ROUTE_TABLE_NAME', '')
 
+// Forced tunneling / firewall egress (only used when USE_EXISTING_VNET is false)
+param enableForcedTunneling = bool(readEnvironmentVariable('ENABLE_FORCED_TUNNELING', 'false'))
+// Proposed NVA (firewall) private IP for the default 0.0.0.0/0 route, e.g. 10.131.1.10
+param firewallPrivateIpAddress = readEnvironmentVariable('FIREWALL_PRIVATE_IP_ADDRESS', '')
+
 // VNet address space and subnet prefixes
 param vnetAddressPrefix = readEnvironmentVariable('VNET_ADDRESS_PREFIX', '10.170.0.0/24')
 param apimSubnetPrefix = readEnvironmentVariable('APIM_SUBNET_PREFIX', '10.170.0.0/26')
